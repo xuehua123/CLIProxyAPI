@@ -1,0 +1,65 @@
+name: Deploy Shanghai CPA
+
+on:
+  push:
+    branches:
+      - codex/xxxaicode_cpa_hub
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DEPLOY_HOST: 47.103.35.132
+  DEPLOY_USER: root
+  DEPLOY_ROOT: /opt/xxxaicode
+  SERVICE_NAME: CLIProxyAPI
+  ARCHIVE_NAME: cliproxyapi.tar.gz
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Create release archive
+        run: git archive --format=tar.gz --output="${RUNNER_TEMP}/${ARCHIVE_NAME}" HEAD
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.SHANGHAI_DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Upload release archive
+        run: |
+          set -euo pipefail
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_ROOT}/releases/${SERVICE_NAME}'"
+          scp "${RUNNER_TEMP}/${ARCHIVE_NAME}" "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_ROOT}/releases/${SERVICE_NAME}/${GITHUB_SHA}.tar.gz"
+
+      - name: Deploy on server
+        run: |
+          set -euo pipefail
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "GITHUB_SHA='${GITHUB_SHA}' DEPLOY_ROOT='${DEPLOY_ROOT}' SERVICE_NAME='${SERVICE_NAME}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          archive_path="${DEPLOY_ROOT}/releases/${SERVICE_NAME}/${GITHUB_SHA}.tar.gz"
+          app_dir="${DEPLOY_ROOT}/apps/${SERVICE_NAME}"
+          compose_dir="${DEPLOY_ROOT}/deploy/cpa-sync"
+
+          test -f "${archive_path}"
+          rm -rf "${app_dir}"
+          mkdir -p "${app_dir}"
+          tar -xzf "${archive_path}" -C "${app_dir}"
+
+          cd "${compose_dir}"
+          docker compose up -d --build cli-proxy-api
+
+          docker compose ps cli-proxy-api
+          EOF
