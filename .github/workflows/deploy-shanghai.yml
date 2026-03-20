@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: shanghai-cliproxy-${{ github.ref_name }}
+  cancel-in-progress: false
+
 env:
   DEPLOY_HOST: 47.103.35.132
   DEPLOY_USER: root
@@ -46,7 +50,8 @@ jobs:
       - name: Deploy on server
         run: |
           set -euo pipefail
-          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "GITHUB_SHA='${GITHUB_SHA}' DEPLOY_ROOT='${DEPLOY_ROOT}' SERVICE_NAME='${SERVICE_NAME}' bash -s" <<'EOF'
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_ROOT}/locks'"
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "GITHUB_SHA='${GITHUB_SHA}' DEPLOY_ROOT='${DEPLOY_ROOT}' SERVICE_NAME='${SERVICE_NAME}' flock -w 900 '${DEPLOY_ROOT}/locks/cpa-sync.deploy.lock' bash -s" <<'EOF'
           set -euo pipefail
 
           archive_path="${DEPLOY_ROOT}/releases/${SERVICE_NAME}/${GITHUB_SHA}.tar.gz"
