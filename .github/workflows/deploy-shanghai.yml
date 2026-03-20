@@ -51,12 +51,12 @@ jobs:
         run: |
           set -euo pipefail
           ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_ROOT}/locks'"
-          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "GITHUB_SHA='${GITHUB_SHA}' DEPLOY_ROOT='${DEPLOY_ROOT}' SERVICE_NAME='${SERVICE_NAME}' flock -w 900 '${DEPLOY_ROOT}/locks/cpa-sync.deploy.lock' bash -s" <<'EOF'
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "GITHUB_SHA='${GITHUB_SHA}' DEPLOY_ROOT='${DEPLOY_ROOT}' SERVICE_NAME='${SERVICE_NAME}' flock -w 900 '${DEPLOY_ROOT}/locks/cliproxyapi.deploy.lock' bash -s" <<'EOF'
           set -euo pipefail
 
           archive_path="${DEPLOY_ROOT}/releases/${SERVICE_NAME}/${GITHUB_SHA}.tar.gz"
           app_dir="${DEPLOY_ROOT}/apps/${SERVICE_NAME}"
-          compose_dir="${DEPLOY_ROOT}/deploy/cpa-sync"
+          compose_dir="${DEPLOY_ROOT}/deploy/cliproxyapi"
 
           test -f "${archive_path}"
           rm -rf "${app_dir}"
