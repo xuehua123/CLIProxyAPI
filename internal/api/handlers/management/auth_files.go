@@ -429,6 +429,11 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	}
 	if claims := extractCodexIDTokenClaims(auth); claims != nil {
 		entry["id_token"] = claims
+		for key, value := range claims {
+			if _, exists := entry[key]; !exists {
+				entry[key] = value
+			}
+		}
 	}
 	// Expose priority from Attributes (set by synthesizer from JSON "priority" field).
 	// Fall back to Metadata for auths registered via UploadAuthFile (no synthesizer).
@@ -471,37 +476,79 @@ func extractCodexIDTokenClaims(auth *coreauth.Auth) gin.H {
 	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return nil
 	}
-	idTokenRaw, ok := auth.Metadata["id_token"].(string)
-	if !ok {
-		return nil
-	}
-	idToken := strings.TrimSpace(idTokenRaw)
-	if idToken == "" {
-		return nil
-	}
-	claims, err := codex.ParseJWTToken(idToken)
-	if err != nil || claims == nil {
-		return nil
-	}
-
 	result := gin.H{}
-	if v := strings.TrimSpace(claims.CodexAuthInfo.ChatgptAccountID); v != "" {
+	if v := metadataStringValue(auth.Metadata, "chatgpt_account_id"); v != "" {
 		result["chatgpt_account_id"] = v
 	}
-	if v := strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType); v != "" {
+	if v := metadataStringValue(auth.Metadata, "plan_type"); v != "" {
 		result["plan_type"] = v
 	}
-	if v := claims.CodexAuthInfo.ChatgptSubscriptionActiveStart; v != nil {
-		result["chatgpt_subscription_active_start"] = v
+	mergeCodexClaims(result, parseCodexJWTClaims(metadataStringValue(auth.Metadata, "id_token")))
+	mergeCodexClaims(result, parseCodexJWTClaims(metadataStringValue(auth.Metadata, "access_token")))
+	if _, exists := result["chatgpt_account_id"]; !exists {
+		if v := metadataStringValue(auth.Metadata, "account_id"); v != "" {
+			result["chatgpt_account_id"] = v
+		}
 	}
-	if v := claims.CodexAuthInfo.ChatgptSubscriptionActiveUntil; v != nil {
-		result["chatgpt_subscription_active_until"] = v
-	}
-
 	if len(result) == 0 {
 		return nil
 	}
 	return result
+}
+
+func parseCodexJWTClaims(token string) *codex.JWTClaims {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return nil
+	}
+	claims, err := codex.ParseJWTToken(trimmed)
+	if err != nil || claims == nil {
+		return nil
+	}
+	return claims
+}
+
+func mergeCodexClaims(target gin.H, claims *codex.JWTClaims) {
+	if target == nil || claims == nil {
+		return
+	}
+	if _, exists := target["chatgpt_account_id"]; !exists {
+		if v := strings.TrimSpace(claims.CodexAuthInfo.ChatgptAccountID); v != "" {
+			target["chatgpt_account_id"] = v
+		}
+	}
+	if _, exists := target["plan_type"]; !exists {
+		if v := strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType); v != "" {
+			target["plan_type"] = v
+		}
+	}
+	if _, exists := target["chatgpt_subscription_active_start"]; !exists {
+		if v := claims.CodexAuthInfo.ChatgptSubscriptionActiveStart; v != nil {
+			target["chatgpt_subscription_active_start"] = v
+		}
+	}
+	if _, exists := target["chatgpt_subscription_active_until"]; !exists {
+		if v := claims.CodexAuthInfo.ChatgptSubscriptionActiveUntil; v != nil {
+			target["chatgpt_subscription_active_until"] = v
+		}
+	}
+}
+
+func metadataStringValue(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	if rawValue, ok := metadata[key]; ok {
+		switch value := rawValue.(type) {
+		case string:
+			return strings.TrimSpace(value)
+		case fmt.Stringer:
+			return strings.TrimSpace(value.String())
+		case json.Number:
+			return strings.TrimSpace(value.String())
+		}
+	}
+	return ""
 }
 
 func authEmail(auth *coreauth.Auth) string {

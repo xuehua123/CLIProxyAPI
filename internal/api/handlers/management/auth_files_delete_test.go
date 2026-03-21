@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -126,4 +127,101 @@ func TestDeleteAuthFile_FallbackToAuthDirPath(t *testing.T) {
 	if _, errStat := os.Stat(filePath); !os.IsNotExist(errStat) {
 		t.Fatalf("expected auth file to be removed from auth dir, stat err: %v", errStat)
 	}
+}
+
+func TestListAuthFiles_CodexAccessTokenFallbackClaims(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	gin.SetMode(gin.TestMode)
+
+	authDir := t.TempDir()
+	fileName := "codex-fallback-team.json"
+	filePath := filepath.Join(authDir, fileName)
+	if errWrite := os.WriteFile(filePath, []byte(`{"type":"codex"}`), 0o600); errWrite != nil {
+		t.Fatalf("failed to write auth file: %v", errWrite)
+	}
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	record := &coreauth.Auth{
+		ID:       "codex/" + fileName,
+		FileName: fileName,
+		Provider: "codex",
+		Attributes: map[string]string{
+			"path": filePath,
+		},
+		Metadata: map[string]any{
+			"type":         "codex",
+			"email":        "demo@example.com",
+			"access_token": mustTestJWT(t, map[string]any{
+				"aud": []string{"https://api.openai.com/v1"},
+				"https://api.openai.com/auth": map[string]any{
+					"chatgpt_account_id": "acct-fallback",
+					"chatgpt_plan_type":  "team",
+				},
+			}),
+			"account_id": "acct-fallback",
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), record); errRegister != nil {
+		t.Fatalf("failed to register auth record: %v", errRegister)
+	}
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
+	h.tokenStore = &memoryAuthStore{}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/auth-files", nil)
+	ctx.Request = req
+	h.ListAuthFiles(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected list status %d, got %d with body %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Files []map[string]any `json:"files"`
+	}
+	if errUnmarshal := json.Unmarshal(recorder.Body.Bytes(), &payload); errUnmarshal != nil {
+		t.Fatalf("failed to decode list payload: %v", errUnmarshal)
+	}
+	if len(payload.Files) != 1 {
+		t.Fatalf("expected 1 auth entry, got %d", len(payload.Files))
+	}
+
+	entry := payload.Files[0]
+	if entry["chatgpt_account_id"] != "acct-fallback" {
+		t.Fatalf("expected top-level chatgpt_account_id, got %#v", entry["chatgpt_account_id"])
+	}
+	if entry["plan_type"] != "team" {
+		t.Fatalf("expected top-level plan_type, got %#v", entry["plan_type"])
+	}
+
+	idTokenClaims, ok := entry["id_token"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected id_token claims payload, got %#v", entry["id_token"])
+	}
+	if idTokenClaims["chatgpt_account_id"] != "acct-fallback" {
+		t.Fatalf("expected nested chatgpt_account_id, got %#v", idTokenClaims["chatgpt_account_id"])
+	}
+	if idTokenClaims["plan_type"] != "team" {
+		t.Fatalf("expected nested plan_type, got %#v", idTokenClaims["plan_type"])
+	}
+}
+
+func mustTestJWT(t *testing.T, claims map[string]any) string {
+	t.Helper()
+
+	header, errHeader := json.Marshal(map[string]any{"alg": "none", "typ": "JWT"})
+	if errHeader != nil {
+		t.Fatalf("failed to encode jwt header: %v", errHeader)
+	}
+	payload, errPayload := json.Marshal(claims)
+	if errPayload != nil {
+		t.Fatalf("failed to encode jwt payload: %v", errPayload)
+	}
+
+	return base64.RawURLEncoding.EncodeToString(header) +
+		"." +
+		base64.RawURLEncoding.EncodeToString(payload) +
+		".signature"
 }
